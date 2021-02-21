@@ -1,9 +1,9 @@
 package pkg
 
-import "github.com/kashmir/internal"
-
-// todo: lock readset?
-// todo: version clock overflow?
+import (
+	"github.com/kashmir/internal"
+	"github.com/pkg/errors"
+)
 
 var versionClock internal.VersionClock
 
@@ -22,28 +22,59 @@ func StmAtomic(block func(*StmContext) interface{}) interface{} {
 			continue
 		}
 
+		// "And she's buying a stairway to heaven..."
+		if len(ctx.writeLog) == 0 {
+			return retVal
+		}
+
 		lockSet := make(map[*StmVariable]int, 0)
-		if acquiredWriteSet := tryAcquireWriteSet(ctx, lockSet); !acquiredWriteSet {
+		if err := tryAcquireSets(ctx, lockSet); err != nil {
+			if fatal := isFatalAcquireErr(err); fatal { // Avoid a panic if lock is already acquired.
+				panic(fatal)
+			}
 			continue
 		}
 
 		ctx.writeVersion = versionClock.Increment()
 
-		// todo: lock readset?
+		// Validate read-set in case changes were made by other actors.
+		if ctx.readVersion != ctx.writeVersion-1 {
+			if validated := validateReadSet(ctx, lockSet); !validated {
+				continue
+			}
+		}
+
+		commitTransaction(ctx, lockSet)
+
+		return retVal
 	}
 }
 
-func tryAcquireWriteSet(ctx *StmContext, writeLockSet map[*StmVariable]int) bool {
-	for writeVal := range ctx.writeLog {
-		if err := writeVal.lock.TryAcquire(); err != nil {
-			// todo: log error?
-			releaseLockSet(writeLockSet)
-			return false
+func tryAcquireSets(ctx *StmContext, lockSet map[*StmVariable]int) error {
+	for writeVar := range ctx.writeLog {
+		if err := writeVar.lock.TryAcquire(); err != nil {
+			releaseLockSet(lockSet)
+			return errors.WithMessage(err, "try acquire write log")
 		}
 
-		writeLockSet[writeVal] = 1
+		lockSet[writeVar] = 1
 	}
-	return true
+
+	for readVar := range ctx.readLog {
+		// Avoid locking a variable which was already locked by us (either by previously being read
+		// or by being part of the write log).
+		if _, alreadyLocked := lockSet[readVar]; alreadyLocked {
+			continue
+		}
+
+		if err := readVar.lock.TryAcquire(); err != nil {
+			releaseLockSet(lockSet)
+			return errors.WithMessage(err, "try acquire read log")
+		}
+
+		lockSet[readVar] = 1
+	}
+	return nil
 }
 
 func releaseLockSet(writeLockSet map[*StmVariable]int) {
@@ -51,5 +82,56 @@ func releaseLockSet(writeLockSet map[*StmVariable]int) {
 		if err := alreadyLocked.lock.Release(); err != nil {
 			panic(err)
 		}
+	}
+}
+
+func validateReadSet(ctx *StmContext, lockSet map[*StmVariable]int) bool {
+	for readVar := range ctx.readLog {
+		locked, version, _ := readVar.lock.Sample()
+		_, lockedByUs := lockSet[readVar]
+		if (locked && !lockedByUs) || version > ctx.readVersion {
+			return false
+		}
+	}
+
+	return true
+}
+
+func commitTransaction(ctx *StmContext, lockSet map[*StmVariable]int) {
+	releasedSet := make(map[*StmVariable]int, len(lockSet))
+
+	for writeVar, writeVal := range ctx.writeLog {
+		oldVal := writeVar.val.Load()
+		writeVar.val.Store(writeVal)
+
+		if err := writeVar.lock.VersionedRelease(ctx.writeVersion); err != nil {
+			writeVar.val.Store(oldVal) // Just in case a recover is used up the latter.
+			panic(err)
+		}
+
+		releasedSet[writeVar] = 1
+	}
+
+	for readVar := range ctx.readLog {
+		// Avoid releasing a variable which was already released by us (either by previously being read
+		// or by being part of the write log).
+		if _, alreadyReleased := releasedSet[readVar]; alreadyReleased {
+			continue
+		}
+
+		if err := readVar.lock.Release(); err != nil {
+			panic(err)
+		}
+
+		releasedSet[readVar] = 1
+	}
+}
+
+func isFatalAcquireErr(err error) bool {
+	switch errors.Cause(err) {
+	case internal.ErrLockModified, internal.ErrVersionOverflow:
+		return true
+	default:
+		return false
 	}
 }

@@ -8,9 +8,10 @@ import (
 const versionOffset = 63
 
 var (
-	errLockModified    = errors.New("lock has been modified")
-	errAlreadyLocked   = errors.New("lock is already locked")
-	errAlreadyReleased = errors.New("lock is already released")
+	ErrLockModified    = errors.New("lock has been modified")
+	ErrAlreadyLocked   = errors.New("lock is already locked")
+	ErrAlreadyReleased = errors.New("lock is already released")
+	ErrVersionOverflow = errors.New("version number cannot be larger than (2^63)-1")
 )
 
 // VersionedLock consists of a lock bit and a version number.
@@ -22,7 +23,7 @@ type VersionedLock uint64
 func (vl *VersionedLock) TryAcquire() error {
 	currentlyLocked, currentVersion, currentLock := vl.Sample()
 	if currentlyLocked {
-		return errAlreadyLocked
+		return ErrAlreadyLocked
 	}
 
 	// Lock = true; Version = current
@@ -33,7 +34,7 @@ func (vl *VersionedLock) TryAcquire() error {
 func (vl *VersionedLock) Release() error {
 	currentlyLocked, currentVersion, currentLock := vl.Sample()
 	if !currentlyLocked {
-		return errAlreadyReleased
+		return ErrAlreadyReleased
 	}
 
 	// Lock = false; Version = current
@@ -44,14 +45,14 @@ func (vl *VersionedLock) Release() error {
 func (vl *VersionedLock) VersionedRelease(newVersion uint64) error {
 	currentlyLocked, _, currentLock := vl.Sample()
 	if !currentlyLocked {
-		return errAlreadyReleased
+		return ErrAlreadyReleased
 	}
 
 	// Lock = false; Version = new
 	return vl.tryCompareAndSwap(false, newVersion, currentLock)
 }
 
-// Retrieves lock state.
+// Retrieves lock state - whether it is locked, its version, and its raw form.
 func (vl *VersionedLock) Sample() (bool, uint64, uint64) {
 	current := atomic.LoadUint64((*uint64)(vl))
 	locked, version := vl.parse(current)
@@ -61,18 +62,18 @@ func (vl *VersionedLock) Sample() (bool, uint64, uint64) {
 func (vl *VersionedLock) tryCompareAndSwap(doLock bool, desiredVersion uint64, compareTo uint64) error {
 	newLock, err := vl.serialize(doLock, desiredVersion)
 	if err != nil {
-		return errors.WithMessage(err, "serialize new unlocked lock")
+		return errors.WithMessage(err, "try compare and swap")
 	}
 
 	if swapped := atomic.CompareAndSwapUint64((*uint64)(vl), compareTo, newLock); !swapped {
-		return errLockModified
+		return ErrLockModified
 	}
 	return nil
 }
 
 func (vl *VersionedLock) serialize(locked bool, version uint64) (uint64, error) {
 	if (version >> versionOffset) == 1 { // Version mustn't override our lock bit.
-		return 0, errors.Errorf("version number cannot be larger than (2^63)-1 (got: %d)", version)
+		return 0, ErrVersionOverflow
 	}
 
 	if locked {
