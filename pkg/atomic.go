@@ -37,7 +37,10 @@ func StmAtomic(block func(*StmContext) interface{}) interface{} {
 
 		ctx.writeVersion = versionClock.Increment()
 
-		// Validate read-set in case changes were made by other actors.
+		// Now that our read and write sets are locked, we need to ensure that nothing has changed in terms of our
+		// read set, in-between running the user's code and locking everything.
+		// However, if no other concurrent actors were involved (readVersion == writeVersion - 1), there is no need to
+		// validate anything cause we were all alone.
 		if ctx.readVersion != ctx.writeVersion-1 {
 			if validated := validateReadSet(ctx, lockSet); !validated {
 				continue
