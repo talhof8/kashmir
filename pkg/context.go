@@ -13,7 +13,7 @@ func (sc *StmContext) Write(stmVariable *StmVariable, newVal interface{}) {
 }
 
 func (sc *StmContext) Read(stmVariable *StmVariable) interface{} {
-	if newVal, foundInWriteLog := sc.readLog[stmVariable]; foundInWriteLog { // Short road to success...
+	if newVal, foundInWriteLog := sc.writeLog[stmVariable]; foundInWriteLog { // Short road to success...
 		return newVal
 	}
 
