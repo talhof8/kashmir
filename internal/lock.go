@@ -79,7 +79,7 @@ func (vl *VersionedLock) serialize(locked bool, version uint64) (uint64, error) 
 	if locked {
 		return (1 << versionOffset) | version, nil
 	}
-	return version << versionOffset, nil
+	return version, nil
 }
 
 func (vl *VersionedLock) parse(serialized uint64) (bool, uint64) {
