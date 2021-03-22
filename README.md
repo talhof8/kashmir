@@ -45,6 +45,7 @@ In addition, Golang's type system forces us to use `interface{}` and type assert
 
 ### Contributions
 Contributions are always welcome!. :heart:
+
 Feel free to open a Pull Request featuring improvements and fixes you see fit.
 
 ### License
