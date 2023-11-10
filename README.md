@@ -3,7 +3,7 @@ Transactional Locking II (TL2)-inspired STM library for Go, with a slight touch.
 On commit time, this library locks the read-set in addition to the write-set in order to prevent potential
 data races in the current TL2 algorithm.
 
-See: https://www.talhoffman.com/software-transactional-memory/
+See: <https://www.talhoffman.com/2021/03/22/software-transactional-memory/>
 
 ### Example
 An example for solving the ATM problem of lack of composability:
